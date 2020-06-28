@@ -21,6 +21,7 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 # Create your views here.
 
+
 def index(request):
     if request.method=='GET':
         return render(request,'login.html', {'wrong': 0})
@@ -97,8 +98,10 @@ def get_first_diag(chief_complaint, disease_dict, syptom_dict):
     diag_count = nu_dis.key_word_extract(chief_complaint, {**disease_dict, **syptom_dict})
     # print(diag_count)
     diag_list = [i[0] for i in sorted(diag_count.items(), key=lambda x: x[1], reverse=True)]
-
-    robot_response = "最有可能是：\"" + diag_list[0] + "\""
+    if len(diag_list)==0:
+        robot_response="请输入您的疾病史和相关症状"
+        return robot_response,diag_list
+    robot_response = "最有可能是：\"" + diag_list[0] + "\""    #关键词匹配计数选出可能的症状
     if len(diag_list) > 1:
         robot_response += "，还有可能是："
         for diag_i in range(1, len(diag_list)):
@@ -118,6 +121,13 @@ def get_labtest(diag_list, diag_index, phy_dict, labtest_dict):
             labtest_result.append(labtest_dict[phy_i])
     return labtest_result
 
+def get_labtest_bydic(first_judge, phy_dict, labtest_dict):
+    labtest_result=[]
+    if first_judge in phy_dict:
+        for phy_i in phy_dict[first_judge]:
+            labtest_result+=list(labtest_dict[phy_i])
+    return list(set(labtest_result))
+
 # 根据用户的检验检查结果，与第diag_index个疾病的生理指标相匹配，满足条件返回True
 def match_phy_condition(phy_result, diag_list, diag_index, phy_dict):
     nu_phy=NLPUtility(word_pattern_file=rootPath + "/data/生理指标实例.csv")
@@ -128,7 +138,14 @@ def match_phy_condition(phy_result, diag_list, diag_index, phy_dict):
             return True
     return False
 
+first_diag=""
+diag_len=0
+need_check=""
+iteration=0
+candidate_disease=[]
 def robot_response(request):
+    global first_diag,diag_len,need_check,iteration,candidate_disease
+    print("iteration:",str(iteration))
     dt = datetime.datetime.now()
     print(dt)
 
@@ -138,6 +155,7 @@ def robot_response(request):
     CsvUtility.write_word_dict(rootPath + '/data/load_dict_jieba.csv', list(disease_dict.keys()) + list(syptom_dict.keys()))
     # print(syptom_dict)
     phy_dict = _get_dict(CsvUtility.read_norm_array_csv(rootPath + '/data/疾病-指标条件关系.csv'), reverse=False)
+    # print(phy_dict)
     labtest_dict = _get_dict(CsvUtility.read_norm_array_csv(rootPath + '/data/生理指标-检验检查关系.csv'))
     print("......加载完成......")
 
@@ -148,7 +166,58 @@ def robot_response(request):
         new_content_my = Communication(com_type="human",com_content=my_text)
         new_content_my.save()
 
-        robot_response, diag_list = get_first_diag(my_text, disease_dict, syptom_dict)
+        if iteration==0:
+            robot_response, diag_list = get_first_diag(my_text, disease_dict, syptom_dict)
+            # print(diag_list)
+            if len(diag_list)>0:
+                first_diag=diag_list[0]
+                # print(first_diag)
+                diag_len=len(diag_list)
+                candidate_disease=diag_list
+                
+                result_labtest=get_labtest_bydic(first_diag,phy_dict,labtest_dict)
+                # print(result_labtest)
+                if len(result_labtest)>0:
+                    iteration+=1
+                    need_check='，'.join(result_labtest)
+                    need_labtest="\n推荐您做以下检验检查："+need_check
+                    robot_response+=need_labtest
+
+        elif iteration>0 and iteration<=3:
+            disease_list=list(phy_dict.keys())
+            stop=0
+            for i in range(len(disease_list)):
+                if match_phy_condition(my_text,disease_list,i,phy_dict):
+                    robot_response="您已确诊"+first_diag+"疾病"+"，请及时治疗！"
+                    first_diag = ""
+                    diag_len = 0
+                    need_check = ""
+                    iteration = 0
+                    candidate_disease=[]
+                    stop=1
+                    break
+            if stop==0:
+                if iteration==diag_len:
+                    robot_response ="您的检查生理指标正常，请注意休息！"
+                    first_diag = ""
+                    diag_len = 0
+                    need_check = ""
+                    iteration = 0
+                    candidate_disease=[]
+                else:
+                    need_check=candidate_disease[iteration]
+                    robot_response="您可能确诊"+need_check+"疾病"
+                    result_labtest = get_labtest_bydic(need_check, phy_dict, labtest_dict)
+                    # print(result_labtest)
+                    if len(result_labtest) > 0:
+                        iteration += 1
+                        need_check = '，'.join(result_labtest)
+                        need_labtest = "\n推荐您做以下检验检查：" + need_check
+                        robot_response += need_labtest
+                    iteration+=1                           #每次询问iteration增加
+
+
+
         new_content_robot = Communication(com_type="robot", com_content=robot_response)
         new_content_robot.save()
         # from django.core import serializers
@@ -167,6 +236,7 @@ def logoutf(request):
     return render(request, 'login.html')
 
 def delete_all(request):
+    global first_diag, diag_len, need_check, iteration
     if request.method=='GET':
         user=request.user
         Communication.objects.all().delete()
@@ -174,6 +244,13 @@ def delete_all(request):
         communication_list = Communication.objects.order_by("date")
         # for i in communication_list:
         #     print(i.com_content)
+        new_welcome_robot = Communication(com_type="robot", com_content="您好！请描述您的疾病史以及日常症状")
+        new_welcome_robot.save()
+        first_diag=""
+        diag_len=0
+        need_check = ""
+        iteration = 0
+        candidate_disease=[]
         return render(request, 'index.html', {'user': user, 'sys_user': sys_user, 'communication_list': communication_list})
 
 # def ajax_demo1(request):
