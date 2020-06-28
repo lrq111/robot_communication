@@ -31,13 +31,20 @@ class NLPUtility(object):
 
 	def condition_extract(self, text, data_dict):
 		sentences = re.split(r'(\.|\!|\?|。|！|？|\.{6})', text)
+		# print(sentences)
 		sub = []
 		cond = []
 		for sentence in sentences:
-			seg_list = jieba.cut(sentence)
+			seg_list = jieba.lcut(sentence)
+			print(seg_list)
 			for w_i, word in enumerate(seg_list):
 				if word in data_dict and w_i < len(seg_list) - 1:
 					sub.append(word)
 					cond.append(seg_list[w_i+1])
 		return sub, cond
+
+
+
+
+
 
